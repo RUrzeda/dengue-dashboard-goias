@@ -316,19 +316,36 @@ def create_time_series_chart(df: pd.DataFrame, title: str = "Evolução de Casos
         Figura Plotly
     """
     
-    if df.empty or 'data_iniSE' not in df.columns:
+    if df.empty:
+        return None
+    
+    # Identificar coluna de data
+    date_col = 'data_iniSE' if 'data_iniSE' in df.columns else 'data_ini_SE'
+    if date_col not in df.columns:
         return None
     
     # Agrupar por data e somar casos
-    df_agg = df.groupby('data_iniSE').agg({
-        'casos_est': 'sum',
-        'casos': 'sum'
-    }).reset_index()
+    agg_dict = {}
+    if 'casos_est' in df.columns:
+        agg_dict['casos_est'] = 'sum'
+    if 'casos' in df.columns:
+        agg_dict['casos'] = 'sum'
+    
+    if not agg_dict:
+        return None
+    
+    df_agg = df.groupby(date_col).agg(agg_dict).reset_index()
+    
+    # Preparar colunas para o gráfico
+    y_cols = [col for col in ['casos_est', 'casos'] if col in df_agg.columns]
+    
+    if not y_cols:
+        return None
     
     fig = px.line(
         df_agg,
-        x='data_iniSE',
-        y=['casos_est', 'casos'],
+        x=date_col,
+        y=y_cols,
         title=title,
         labels={
             'data_iniSE': 'Data',
@@ -441,13 +458,31 @@ def create_alert_level_distribution(df: pd.DataFrame):
         Figura Plotly
     """
     
-    if df.empty or 'nivel' not in df.columns:
+    if df.empty:
         return None
     
-    # Contar níveis
-    df_latest = df.sort_values('data_iniSE').groupby('municipio_geocodigo').tail(1)
+    # Identificar coluna de nível
+    nivel_col = 'nivel' if 'nivel' in df.columns else 'level'
+    if nivel_col not in df.columns:
+        return None
     
-    nivel_counts = df_latest['nivel'].value_counts().sort_index()
+    # Identificar coluna de data
+    date_col = 'data_iniSE' if 'data_iniSE' in df.columns else 'data_ini_SE'
+    
+    # Identificar coluna de geocódigo
+    geocode_col = None
+    for col in ['municipio_geocodigo', 'geocode', 'code_muni']:
+        if col in df.columns:
+            geocode_col = col
+            break
+    
+    # Contar níveis
+    if geocode_col:
+        df_latest = df.sort_values(date_col).groupby(geocode_col).tail(1)
+    else:
+        df_latest = df.sort_values(date_col).tail(len(df.drop_duplicates(subset=['municipio_nome'] if 'municipio_nome' in df.columns else None)))
+    
+    nivel_counts = df_latest[nivel_col].value_counts().sort_index()
     nivel_names = {1: "Verde", 2: "Amarelo", 3: "Laranja", 4: "Vermelho"}
     nivel_colors = {1: "#2ecc71", 2: "#f39c12", 3: "#e67e22", 4: "#e74c3c"}
     
@@ -491,19 +526,49 @@ def create_metrics_summary(df: pd.DataFrame):
             'total_casos': 0,
             'total_casos_est': 0,
             'media_rt': 0,
-            'municipios_alerta_vermelho': 0
+            'municipios_alerta_vermelho': 0,
+            'municipios_alerta_laranja': 0,
+            'municipios_alerta_amarelo': 0,
+            'municipios_alerta_verde': 0,
         }
     
-    df_latest = df.sort_values('data_iniSE').groupby('municipio_geocodigo').tail(1)
+    # Identificar coluna de data (pode ser 'data_iniSE' ou 'data_ini_SE')
+    date_col = 'data_iniSE' if 'data_iniSE' in df.columns else 'data_ini_SE'
+    
+    # Identificar coluna de geocódigo (pode ser 'municipio_geocodigo' ou outra)
+    geocode_col = None
+    for col in ['municipio_geocodigo', 'geocode', 'code_muni']:
+        if col in df.columns:
+            geocode_col = col
+            break
+    
+    # Se não houver coluna de geocódigo, usar índice
+    if geocode_col is None:
+        df_latest = df.sort_values(date_col).tail(len(df.drop_duplicates(subset=['municipio_nome'] if 'municipio_nome' in df.columns else None)))
+    else:
+        df_latest = df.sort_values(date_col).groupby(geocode_col).tail(1)
+    
+    # Preencher valores padrão para colunas que podem não existir
+    casos = df_latest['casos'].sum() if 'casos' in df_latest.columns else 0
+    casos_est = df_latest['casos_est'].sum() if 'casos_est' in df_latest.columns else 0
+    rt_mean = df_latest['Rt'].mean() if 'Rt' in df_latest.columns else 0
+    nivel_col = 'nivel' if 'nivel' in df_latest.columns else 'level'
+    
+    nivel_counts = {
+        4: int((df_latest[nivel_col] == 4).sum()) if nivel_col in df_latest.columns else 0,
+        3: int((df_latest[nivel_col] == 3).sum()) if nivel_col in df_latest.columns else 0,
+        2: int((df_latest[nivel_col] == 2).sum()) if nivel_col in df_latest.columns else 0,
+        1: int((df_latest[nivel_col] == 1).sum()) if nivel_col in df_latest.columns else 0,
+    }
     
     return {
-        'total_casos': int(df_latest['casos'].sum()),
-        'total_casos_est': int(df_latest['casos_est'].sum()),
-        'media_rt': float(df_latest['Rt'].mean()),
-        'municipios_alerta_vermelho': int((df_latest['nivel'] == 4).sum()),
-        'municipios_alerta_laranja': int((df_latest['nivel'] == 3).sum()),
-        'municipios_alerta_amarelo': int((df_latest['nivel'] == 2).sum()),
-        'municipios_alerta_verde': int((df_latest['nivel'] == 1).sum()),
+        'total_casos': int(casos),
+        'total_casos_est': int(casos_est),
+        'media_rt': float(rt_mean),
+        'municipios_alerta_vermelho': nivel_counts[4],
+        'municipios_alerta_laranja': nivel_counts[3],
+        'municipios_alerta_amarelo': nivel_counts[2],
+        'municipios_alerta_verde': nivel_counts[1],
     }
 
 
