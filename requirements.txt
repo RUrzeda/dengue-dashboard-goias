@@ -1,0 +1,12 @@
+streamlit==1.28.1
+pandas==2.1.3
+numpy==1.26.2
+plotly==5.18.0
+requests==2.31.0
+geopandas==0.14.0
+geobr==0.2.2
+shapely==2.0.2
+matplotlib==3.8.2
+seaborn==0.13.0
+python-dateutil==2.8.2
+pytz==2023.3
