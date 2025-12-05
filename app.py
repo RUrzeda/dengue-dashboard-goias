@@ -381,52 +381,109 @@ def create_choropleth_map(gdf: gpd.GeoDataFrame, df: pd.DataFrame, metric: str =
         return None
     
     try:
+        # Identificar coluna de data
+        date_col = 'data_iniSE' if 'data_iniSE' in df.columns else 'data_ini_SE'
+        
+        # Identificar coluna de geocódigo
+        geocode_col = None
+        for col in ['municipio_geocodigo', 'geocode', 'code_muni']:
+            if col in df.columns:
+                geocode_col = col
+                break
+        
+        if geocode_col is None:
+            logger.warning("Nenhuma coluna de geocódigo encontrada")
+            return None
+        
         # Preparar dados para o mapa
-        # Usar o registro mais recente de cada município
-        df_latest = df.sort_values('data_iniSE').groupby('municipio_geocodigo').tail(1)
+        df_latest = df.sort_values(date_col).groupby(geocode_col).tail(1).reset_index(drop=True)
+        
+        if df_latest.empty:
+            logger.warning("Nenhum dado disponível após agrupamento")
+            return None
         
         # Merge com dados geográficos
         gdf_merged = gdf.merge(
             df_latest,
             left_on='code_muni',
-            right_on='municipio_geocodigo',
+            right_on=geocode_col,
             how='left'
         )
         
-        # Converter para GeoJSON
-        gdf_merged['geometry'] = gdf_merged['geometry'].astype(str)
+        if gdf_merged.empty:
+            logger.warning("Merge resultou em DataFrame vazio")
+            return None
         
-        # Criar mapa
-        if metric == "p_inc100k":
-            color_col = 'p_inc100k'
-            title = "Taxa de Incidência (casos por 100k hab.)"
-            colorscale = "YlOrRd"
-        elif metric == "nivel":
-            color_col = 'nivel'
-            title = "Nível de Alerta"
+        # Identificar coluna de métrica
+        color_col = metric
+        if color_col not in gdf_merged.columns:
+            # Tentar alternativas
+            for alt_metric in ['casos_est', 'casos', 'p_inc100k']:
+                if alt_metric in gdf_merged.columns:
+                    color_col = alt_metric
+                    break
+        
+        # Verificar se a métrica existe
+        if color_col not in gdf_merged.columns:
+            logger.warning(f"Métrica {metric} não encontrada. Usando primeira coluna numérica.")
+            numeric_cols = gdf_merged.select_dtypes(include=[np.number]).columns.tolist()
+            if numeric_cols:
+                color_col = numeric_cols[0]
+            else:
+                return None
+        
+        # Preencher NaN com 0 para a métrica
+        gdf_merged[color_col] = gdf_merged[color_col].fillna(0)
+        
+        # Definir título baseado na métrica
+        metric_titles = {
+            'p_inc100k': 'Taxa de Incidência (casos por 100k hab.)',
+            'nivel': 'Nível de Alerta',
+            'Rt': 'Número Reprodutivo Efetivo (Rt)',
+            'casos_est': 'Casos Estimados',
+            'casos': 'Casos Notificados'
+        }
+        title = metric_titles.get(color_col, f'Métrica: {color_col}')
+        
+        # Definir colorscale baseada na métrica
+        if color_col == 'nivel':
             colorscale = "RdYlGn_r"
-        else:  # Rt
-            color_col = 'Rt'
-            title = "Número Reprodutivo Efetivo (Rt)"
+        elif color_col in ['p_inc100k', 'casos_est', 'casos']:
+            colorscale = "YlOrRd"
+        else:
             colorscale = "Viridis"
         
+        # Preparar hover_data dinamicamente
+        hover_data = {}
+        for col in ['municipio_nome', 'name', 'pop', 'casos_est', 'casos', 'Rt', 'p_inc100k', 'nivel']:
+            if col in gdf_merged.columns:
+                if col in ['pop', 'casos_est', 'casos']:
+                    hover_data[col] = ':.0f'
+                elif col in ['Rt', 'p_inc100k']:
+                    hover_data[col] = ':.2f'
+                else:
+                    hover_data[col] = True
+        
+        hover_data['geometry'] = False
+        hover_data['code_muni'] = False
+        if geocode_col in hover_data:
+            hover_data[geocode_col] = False
+        
+        # Determinar hover_name
+        hover_name = None
+        for col in ['name', 'municipio_nome']:
+            if col in gdf_merged.columns:
+                hover_name = col
+                break
+        
+        # Criar mapa
         fig = px.choropleth_mapbox(
             gdf_merged,
             geojson=gdf_merged.geometry,
             locations=gdf_merged.index,
             color=color_col,
-            hover_name='name',
-            hover_data={
-                'municipio_nome': True,
-                'pop': ':.0f',
-                'casos_est': ':.0f',
-                'Rt': ':.2f',
-                'p_inc100k': ':.2f',
-                'nivel': True,
-                'geometry': False,
-                'code_muni': False,
-                'municipio_geocodigo': False
-            },
+            hover_name=hover_name,
+            hover_data=hover_data,
             color_continuous_scale=colorscale,
             mapbox_style="carto-positron",
             zoom=6,
@@ -443,7 +500,7 @@ def create_choropleth_map(gdf: gpd.GeoDataFrame, df: pd.DataFrame, metric: str =
         return fig
     
     except Exception as e:
-        logger.error(f"Erro ao criar mapa: {e}")
+        logger.error(f"Erro ao criar mapa: {e}", exc_info=True)
         return None
 
 
