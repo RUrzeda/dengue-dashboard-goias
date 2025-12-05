@@ -101,7 +101,7 @@ GOIAS_MUNICIPALITIES = {
 @st.cache_data(ttl=3600)
 def fetch_infodengue_state_data(state_code: str = "GO", disease: str = "dengue"):
     """
-    Busca dados epidemiológicos do estado via API Mosqlimate.
+    Busca dados epidemiológicos do estado via API InfoDengue.
     Usa cache para evitar requisições desnecessárias.
     
     Args:
@@ -113,41 +113,43 @@ def fetch_infodengue_state_data(state_code: str = "GO", disease: str = "dengue")
     """
     
     try:
-        # Definir período: últimas 52 semanas
-        end_date = datetime.now().date()
-        start_date = end_date - timedelta(days=365)
+        # Usar API InfoDengue alternativa (sem autenticação)
+        current_year = datetime.now().year
         
-        params = {
-            "page": 1,
-            "per_page": 100,
-            "disease": disease,
-            "start": str(start_date),
-            "end": str(end_date),
-            "uf": state_code
-        }
+        # Tentar buscar dados de alguns municípios principais de Goiás
+        all_data = []
         
-        logger.info(f"Buscando dados de {disease} para {state_code}")
+        for geocode, municipality_name in GOIAS_MUNICIPALITIES.items():
+            try:
+                params = {
+                    "geocode": geocode,
+                    "disease": disease,
+                    "format": "json",
+                    "ew_start": 1,
+                    "ew_end": 53,
+                    "ey_start": current_year - 1,
+                    "ey_end": current_year
+                }
+                
+                response = requests.get(INFODENGUE_API, params=params, timeout=10)
+                response.raise_for_status()
+                
+                data = response.json()
+                
+                if isinstance(data, list):
+                    all_data.extend(data)
+                elif isinstance(data, dict) and data:
+                    all_data.append(data)
+                    
+            except Exception as e:
+                logger.warning(f"Erro ao buscar dados para {municipality_name}: {e}")
+                continue
         
-        response = requests.get(MOSQLIMATE_API, params=params, timeout=30)
-        response.raise_for_status()
+        if not all_data:
+            logger.warning("Nenhum dado obtido da API")
+            return pd.DataFrame()
         
-        data = response.json()
-        items = data.get("items", [])
-        
-        # Verificar se há múltiplas páginas
-        pagination = data.get("pagination", {})
-        total_pages = pagination.get("total_pages", 1)
-        
-        all_items = items.copy()
-        
-        for page in range(2, min(total_pages + 1, 6)):  # Limitar a 5 páginas
-            params["page"] = page
-            response = requests.get(MOSQLIMATE_API, params=params, timeout=30)
-            response.raise_for_status()
-            data = response.json()
-            all_items.extend(data.get("items", []))
-        
-        df = pd.DataFrame(all_items)
+        df = pd.DataFrame(all_data)
         
         # Processar dados
         if not df.empty:
@@ -221,8 +223,8 @@ def get_goias_geodata():
     try:
         logger.info("Carregando dados geográficos de Goiás")
         
-        # Ler municípios do Brasil
-        gdf = read_municipality(code_muni="GO", simplify=True)
+        # Ler municípios do Brasil com parâmetro correto
+        gdf = read_municipality(code_muni="GO", simplified=True)
         
         logger.info(f"Dados geográficos carregados: {len(gdf)} municípios")
         
